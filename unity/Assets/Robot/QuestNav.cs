@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
+using MinimalNtCore;
 using NetworkTables;
 using TMPro;
 using UnityEngine;
@@ -51,6 +52,22 @@ namespace Robot
     /// </summary>
     public class QuestNav : MonoBehaviour
     {
+        private NtInstance inst = new NtInstance("QuestNavWFTISHappening");
+
+        private IntegerPublisher questMiso;
+        private IntegerSubscriber questMosi;
+
+        private DoublePublisher questTimestamp;
+        private FloatArrayPublisher questPosition;
+        private FloatArrayPublisher questQuaternion;
+        private FloatArrayPublisher questEulerAngles;
+        private DoublePublisher questBatteryPercent;
+
+        private IntegerPublisher frameCount;
+
+        private PolledLogger poller;
+
+
         #region Fields
         /// <summary>
         /// Current frame index from Unity's Time.frameCount
@@ -297,15 +314,62 @@ namespace Robot
         /// </summary>
         void Start()
         {
+            /*
+             *         private IntegerPublisher questMiso;
+        private IntegerSubscriber questMosi;
+
+        private DoublePublisher questTimestamp;
+        private FloatArrayPublisher questPosition;
+        private FloatArrayPublisher questQuaternion;
+        private FloatArrayPublisher questEulerAngles;
+        private DoublePublisher questBatteryPercent;
+
+        private IntegerPublisher frameCount;
+             */
+
+            const string TableName = "/questnavcore/";
+
+            questMiso = inst.GetIntegerPublisher($"{TableName}miso", PubSubOptions.AllDefault);
+            questMosi = inst.GetIntegerSubscriber($"{TableName}mosi", PubSubOptions.AllDefault);
+            questTimestamp = inst.GetDoublePublisher($"{TableName}timestamp", PubSubOptions.AllDefault);
+            frameCount = inst.GetIntegerPublisher($"{TableName}frameCount", PubSubOptions.AllDefault);
+            questPosition = inst.GetFloatArrayPublisher($"{TableName}position", PubSubOptions.AllDefault);
+            questQuaternion = inst.GetFloatArrayPublisher($"{TableName}quaternion", PubSubOptions.AllDefault);
+            questEulerAngles = inst.GetFloatArrayPublisher($"{TableName}eulerAngles", PubSubOptions.AllDefault);
+            questBatteryPercent = inst.GetDoublePublisher($"{TableName}batteryPercent", PubSubOptions.AllDefault);
+
+            poller = inst.CreateLogger(1, 50);
+
+
+
             OVRPlugin.systemDisplayFrequency = displayFrequency;
-            teamNumber = PlayerPrefs.GetString("TeamNumber", "9999");
+            teamNumber = PlayerPrefs.GetString("TeamNumber", "1");
             setInputBox(teamNumber);
+
+            if (int.TryParse(teamNumber, out var tn))
+            {
+                (string, int)[] addresses = new (string, int)[] {
+                (generateIP(), 5810),
+                ("172.22.11.2", 5810),
+                ($"roboRIO-{teamNumber}-FRC.local", 5810),
+                //($"roboRIO-{teamNumber}-FRC.lan", 5810),
+                ($"roboRIO-{teamNumber}-FRC.frc-field.local", 5810) };
+                QueuedLogger.Log("[QuestNav] Updating Team Number for NtCore");
+                inst.SetAddresses(addresses);
+            }
+            else
+            {
+                QueuedLogger.Log("[QuestNav] Failed to parse");
+            }
+
             teamInput.Select();
             UpdateIPAddressText();
             UpdateConStateText();
             ConnectToRobot();
             teamUpdateButton.onClick.AddListener(UpdateTeamNumber);
             teamInput.onSelect.AddListener(OnInputFieldSelected);
+
+
         }
 
         /// <summary>
@@ -758,7 +822,33 @@ namespace Robot
             frcDataSink.PublishValue("/questnav/quaternion", rotation.ToArray());
             frcDataSink.PublishValue("/questnav/eulerAngles", eulerAngles.ToArray());
             frcDataSink.PublishValue("/questnav/batteryPercent", batteryPercent);
+
+            frameCount.Set(frameIndex);
+            questTimestamp.Set(timeStamp);
+            questPosition.Set(position.ToArray());
+            questQuaternion.Set(rotation.ToArray());
+            questEulerAngles.Set(eulerAngles.ToArray());
+            questBatteryPercent.Set(batteryPercent);
+
+            QueuedLogger.Log("Polling");
+
+            var messages = poller.PollForMessages();
+
+            if (messages != null)
+            {
+                QueuedLogger.Log($"polled {messages.Count}");
+                foreach (var message in messages)
+                {
+                    QueuedLogger.Log($"[QuestNav/NtCore] {message.level}: {message.message} fn {message.filename}");
+                }
+            } else
+            {
+                QueuedLogger.Log("Polled null");
+            }
         }
+
+  
+
         #endregion
 
         #region Command Processing Methods
@@ -983,6 +1073,16 @@ namespace Robot
             PlayerPrefs.SetString("TeamNumber", teamNumber);
             PlayerPrefs.Save();
             setInputBox(teamNumber);
+
+            if (int.TryParse(teamNumber, out var tn))
+            {
+                QueuedLogger.Log("[QuestNav] Updating Team Number for NtCore");
+                inst.SetTeamNumber(tn);
+            }
+            else
+            {
+                QueuedLogger.Log("[QuestNav] Failed to parse");
+            }
 
             // Clear cached IP and candidate failure data.
             ipAddress = "";
